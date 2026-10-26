@@ -4,6 +4,15 @@ Upload a meeting recording (English, Turkish or mixed) to a Google Drive folder.
 
 Built for **short recordings on Groq's free tier**.
 
+<img width="1520" height="444" alt="Workflow" src="https://github.com/user-attachments/assets/49069c76-8539-49c7-babc-a0e74c4acb53" />
+
+
+## Requirements
+
+- n8n (self-hosted or cloud)
+- Groq API key (free tier is enough)
+- Google account (Drive + Sheets OAuth2)
+- Slack app with a bot token and scopes `chat:write`, `channels:read` (add `groups:read` for private channels)
 
 ## Setup
 
@@ -14,8 +23,9 @@ Built for **short recordings on Groq's free tier**.
    - All Google Sheets nodes → the status sheet
    - *Send Summary* → summary channel, *Notify Error* + *Alert Admin Channel* → error channel
 4. **CONFIG** (top of the *Validate File* node): set `summariesFolderId` to the Drive folder for summary docs. It must **not** be the watched recordings folder.
-5. Main workflow → *Settings* → *Error Workflow* → `Meeting Summary - Error Handler`.
-6. Activate the main workflow.
+5. Invite the Slack bot to both channels: `/invite @your_bot`.
+6. Main workflow → *Settings* → *Error Workflow* → `Meeting Summary - Error Handler`.
+7. Activate the main workflow.
 
 ### Status sheet
 
@@ -79,6 +89,3 @@ All tunables are in the `CONFIG` block of the *Validate File* node:
 
 - Max file size 25 MB (Groq free tier), about 1 h of mono 64 kbps mp3.
 - Long meetings may hit Groq's free-tier tokens-per-minute limit in the chunk step.
-
-
-
