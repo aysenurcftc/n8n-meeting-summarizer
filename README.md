@@ -4,8 +4,6 @@ Upload a meeting recording (English, Turkish or mixed) to a Google Drive folder.
 
 Built for **short recordings on Groq's free tier**.
 
-<img width="1520" height="444" alt="Workflow" src="https://github.com/user-attachments/assets/49069c76-8539-49c7-babc-a0e74c4acb53" />
-
 
 ## Requirements
 
