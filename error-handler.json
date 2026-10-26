@@ -1,0 +1,75 @@
+{
+  "name": "Meeting Summary - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "99123478-3309-4e40-bcce-6390353645c3",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        96,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0C5LS30NGP",
+          "mode": "list",
+          "cachedResultName": "meetings-error"
+        },
+        "text": "=:rotating_light: *Workflow crashed (unhandled error)*\n*Workflow:* {{ $json.workflow.name }}\n*Last node:* {{ $json.execution.lastNodeExecuted }}\n*Error:* {{ $json.execution.error.message }}\n<{{ $json.execution.url }}|Open execution>\n_Affected file stays in `processing`; it will be retried automatically after 2h._",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "51d73551-0203-49c6-9c34-1a14c1282326",
+      "name": "Alert Admin Channel",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        336,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "webhookId": "82f1f8bc-ddf2-4034-8247-ef0444a5ba37",
+      "credentials": {
+        "slackApi": {
+          "id": "mAPU7MeHKZovhzFM",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Alert Admin Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "a9b6f78d-853d-4ab0-a0e0-48ce167e8384",
+  "meta": {
+    "instanceId": "586dbb715a5e41155ead64fc9753005aaabe895cd53ceaed8bb49d2f20711760"
+  },
+  "nodeGroups": [],
+  "id": "4BPxAjzmimoUTWgb",
+  "tags": []
+}

@@ -1,0 +1,1520 @@
+{
+  "name": "Meeting Audio Summary (Groq) - v2",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 15,
+              "unit": "minutes"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "value": "YOUR_DRIVE_FOLDER_ID",
+          "mode": "id",
+          "cachedResultName": "meetings"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "id": "976deef4-86c7-41ec-a5c8-d4eab4ef3218",
+      "name": "Drive Trigger",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        7104,
+        3936
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "818e16eb-103c-4f2d-8b37-23452ef60996",
+      "name": "Retry Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        6896,
+        4192
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Mettings IDs"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sayfa1"
+        },
+        "options": {}
+      },
+      "id": "70de9618-bf87-460c-b949-e21a402b1312",
+      "name": "Find Retryable",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        7104,
+        4192
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Picks files that should be retried:\n//  - Status = failed  (transient error, attempts left)\n//  - Status = processing but stale (> 2h) -> the run crashed midway\nconst STALE_MS = 2 * 60 * 60 * 1000;\nconst now = Date.now();\nreturn $input.all()\n  .map(i => i.json)\n  .filter(r => r['File ID'] && (\n    r.Status === 'failed' ||\n    (r.Status === 'processing' && now - Date.parse(r['Updated At']) > STALE_MS)\n  ))\n  .map(r => ({ json: { id: r['File ID'], name: r['File Name'], fromRetry: true } }));"
+      },
+      "id": "03c47e57-c350-40a5-a062-099dcd8d7fee",
+      "name": "Select Retryable",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7296,
+        4192
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "984a17bb-598d-47d3-a856-6cbfa64ed3cb",
+      "name": "Loop Over Files",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        7520,
+        3936
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== CONFIG: everything you may want to tune lives here =====\nconst CONFIG = {\n  maxAttempts: 3,                 // total tries per file (incl. scheduled retries)\n  maxFileSizeMB: 25,              // Groq Whisper upload limit for your plan\n  directThreshold: 15000,         // chars; above this -> map-reduce\n  chunkSize: 6000,                // chars per chunk (map step)\n  chunkOverlap: 300,              // chars repeated between chunks\n  minTranscriptChars: 20,         // shorter = treated as empty/silent audio\n  summaryLanguage: 'English',     // or: 'the same language as the transcript'\n  summariesFolderId: '',          // Drive folder ID for summary docs (empty = My Drive root)\n  n8nBaseUrl: '',                 // e.g. 'https://n8n.example.com' -> adds \"Open execution\" link to alerts\n};\n// ===============================================================\n\nconst f = $input.first().json;\nconst fileId = f.id || f.fileId;\nconst fileName = f.name || f.fileName || fileId;\nconst mimeType = f.mimeType || '';\nconst sizeMB = f.size ? Number(f.size) / 1048576 : null;\nconst SUPPORTED_EXT = ['flac', 'mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'ogg', 'opus', 'wav', 'webm'];\nconst ext = String(fileName || '').split('.').pop().toLowerCase();\n\nlet reason = '';\nif (!fileId) {\n  reason = 'Missing file ID';\n} else if (mimeType && !mimeType.startsWith('audio/') && !mimeType.startsWith('video/') && !SUPPORTED_EXT.includes(ext)) {\n  reason = `Unsupported file type (${mimeType}). Supported: ${SUPPORTED_EXT.join(', ')}`;\n} else if (sizeMB !== null && sizeMB > CONFIG.maxFileSizeMB) {\n  reason = `File is ${sizeMB.toFixed(1)} MB, limit is ${CONFIG.maxFileSizeMB} MB. Compress it (e.g. mono 64 kbps mp3) and re-upload.`;\n}\n\nreturn [{ json: { fileId, fileName, mimeType, sizeMB, valid: !reason, reason, config: CONFIG } }];"
+      },
+      "id": "110d672c-f285-4f2c-ad39-407eb9dc4eac",
+      "name": "Validate File",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7744,
+        4016
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Mettings IDs"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sayfa1"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "File ID",
+              "lookupValue": "={{ $json.fileId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4df0a677-3a87-4522-ba5b-7900cf9ee547",
+      "name": "Check Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        7952,
+        4016
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const file = $('Validate File').first().json;\nconst row = $input.first()?.json || {};\nconst status = String(row.Status || '').trim();\nconst prevAttempts = Number(row.Attempts) || 0;\nlet attempts = prevAttempts + 1;\nconst STALE_MS = 2 * 60 * 60 * 1000;\nconst stale = status === 'processing' && Date.now() - Date.parse(row['Updated At']) > STALE_MS;\n\nlet action = 'process';\nlet reason = file.reason;\nif (status === 'done' || status === 'failed_permanent' || (status === 'processing' && !stale)) action = 'skip';\nelse if (!file.valid) action = 'reject';\nelse if (attempts > file.config.maxAttempts) {\n  // e.g. the run keeps crashing (out of memory) and never reaches Build Error\n  action = 'reject';\n  attempts = prevAttempts;   // nothing new was tried -> alert shows 3/3, not 4/3\n  reason = `Gave up after ${prevAttempts} attempts (previous runs crashed or kept failing)`;\n}\n\nreturn [{ json: { ...file, reason, previousStatus: status || 'new', attempts, action } }];"
+      },
+      "id": "4ab154fa-a60d-48d2-ac77-7f104a5d6244",
+      "name": "Decide Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8176,
+        4016
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "58347090-27e6-4028-b292-281f1a20b9a4",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "process",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "process"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3c3461a1-8bf9-45d9-b49d-b604d581f19c",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "reject",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reject"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "f47ffb3d-0251-464a-8efc-b7e11b64e304",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "skip",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "skip"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b251ac0c-5df3-4b78-a9d7-6132960fa295",
+      "name": "Route by Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        8400,
+        4016
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Mettings IDs"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sayfa1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "File ID": "={{ $json.fileId }}",
+            "File Name": "={{ $json.fileName }}",
+            "Status": "processing",
+            "Attempts": "={{ $json.attempts }}",
+            "Updated At": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "File ID"
+          ],
+          "schema": [
+            {
+              "id": "File ID",
+              "displayName": "File ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "File Name",
+              "displayName": "File Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Attempts",
+              "displayName": "Attempts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Last Error",
+              "displayName": "Last Error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Updated At",
+              "displayName": "Updated At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "75be5852-bf44-4b82-a7cc-b4bd5bb815e7",
+      "name": "Mark Processing",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        8640,
+        3856
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Decide Action').first().json.fileId }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "4155be82-1166-4486-92b7-42ef6ef4ca3c",
+      "name": "Download Audio",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        8864,
+        3856
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "model",
+              "value": "whisper-large-v3-turbo"
+            },
+            {
+              "name": "response_format",
+              "value": "verbose_json"
+            },
+            {
+              "name": "temperature",
+              "value": "0"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "7a2ee50e-37a4-4d35-b795-5add8e088ee1",
+      "name": "Transcribe (Groq Whisper)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        9104,
+        3840
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "groqApi": {
+          "name": "Groq API"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Validate File').first().json.config;\nconst r = $input.first().json;\nconst transcript = String(r.text || '').trim();\n\n// \"PERMANENT:\" prefix tells Build Error not to retry this file\nif (transcript.length < cfg.minTranscriptChars) {\n  throw new Error('PERMANENT: Transcript is empty or too short (silent / non-speech audio?)');\n}\n\nreturn [{ json: {\n  transcript,\n  length: transcript.length,\n  language: r.language || 'unknown',          // auto-detected by Whisper (english, turkish, ...)\n  durationMin: Math.round((r.duration || 0) / 60),\n} }];"
+      },
+      "id": "bb265bd4-7db1-4784-bf7b-b3bc1e99da02",
+      "name": "Prepare Transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9312,
+        3824
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cc226e78-2509-47db-a2b5-173bcfa89df3",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": "={{ $('Validate File').first().json.config.directThreshold }}",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b5b72d57-5059-49ba-8af5-a112d33b7a9c",
+      "name": "Long Transcript?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        9520,
+        3856
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Validate File').first().json.config;\nconst text = $input.first().json.transcript;\nconst size = cfg.chunkSize, overlap = cfg.chunkOverlap;\n\n// Split on sentence boundaries so no sentence is cut in half\nconst sentences = text.match(/[^.!?…]+[.!?…]+[\"')\\]]*\\s*|[^.!?…]+$/g) || [text];\nconst chunks = [];\nlet cur = '';\nfor (const s of sentences) {\n  if (cur.length + s.length > size && cur.length > 0) {\n    chunks.push(cur.trim());\n    cur = cur.slice(-overlap) + s;   // keep some context from the previous chunk\n  } else {\n    cur += s;\n  }\n}\nif (cur.trim()) chunks.push(cur.trim());\n\n// Safety net: hard-split anything still too long (e.g. no punctuation at all)\nconst out = [];\nfor (const c of chunks) for (let i = 0; i < c.length; i += size) out.push(c.slice(i, i + size));\n\nreturn out.map((chunk, i) => ({ json: { chunk, index: i + 1, total: out.length } }));"
+      },
+      "id": "2af4e574-83f3-4d0a-8028-030ac44bbf4b",
+      "name": "Split Transcript Into Chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9760,
+        3664
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Summarize this meeting transcript.\n\n<transcript>\n{{ $json.transcript }}\n</transcript>",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "=You are a meeting transcript summarizer writing for a professional team channel.\n\nOutput format (Slack mrkdwn). Keep the English labels and headings exactly as written:\n\nTopic: <meeting topic as a short title, max 8 words, no ending period>\n\n*Key Points*\n• point\n\n*Decisions*\n• decision\n\n*Action Items*\n• Task, starting with a verb — *Owner* · _deadline_\n\nRules:\n- Write the topic and all bullet content in {{ $('Validate File').first().json.config.summaryLanguage }}.\n- The audio may be in English, Turkish or a mix of both. Understand all of it.\n- Only include facts stated in the input. Never invent names, dates or numbers.\n- Action Items: add \" — *Owner*\" only if a person was clearly named for that task, and \" · _deadline_\" only if a deadline was mentioned. If neither is known, write just the task. Never write \"Unassigned\", \"TBD\" or \"deadline:\".\n- Decisions are things explicitly agreed. Do not repeat the same sentence in Key Points, Decisions and Action Items; each section adds something new.\n- Key Points: max 6 bullets, one short sentence each.\n- If a section has nothing, write \"• None\".\n- The text comes from speech recognition and may contain recognition errors; do not quote obviously garbled words.\n- Return only the formatted text. No preamble, no commentary, no code blocks."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "4ce6c6d4-2056-4c18-9840-4699d0cd515d",
+      "name": "Summarize (Direct)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        9760,
+        4016
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=This is part {{ $json.index }} of {{ $json.total }} of a meeting transcript. Summarize only this part in a few bullet points: facts, decisions and any action items (with owners if stated). No intro/outro text.\n\n<excerpt>\n{{ $json.chunk }}\n</excerpt>",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "=You summarize meeting transcript excerpts concisely and factually. The excerpt may be in English, Turkish or both; write your notes in {{ $('Validate File').first().json.config.summaryLanguage }}. Never invent facts."
+            }
+          ]
+        },
+        "batching": {
+          "batchSize": 1,
+          "delayBetweenBatches": 2000
+        }
+      },
+      "id": "5c69cb68-8f23-4eb0-88f9-101a9d5aa575",
+      "name": "Summarize Chunk (Map)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        9984,
+        3664
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Never send a partial summary: if any chunk failed, fail the whole file.\nconst items = $input.all();\nconst expected = $('Split Transcript Into Chunks').all().length;\nconst failed = items.filter(i => i.json.error || !String(i.json.text || '').trim());\n\nif (items.length !== expected || failed.length) {\n  const e = failed[0]?.json.error;\n  const detail = typeof e === 'string' ? e : (e?.message || 'missing output');\n  throw new Error(`${failed.length || expected - items.length} of ${expected} chunk summaries failed: ${detail}`);\n}\n\nreturn [{ json: {\n  combinedSummaries: items.map((i, n) => `### Part ${n + 1}\\n${i.json.text}`).join('\\n\\n'),\n} }];"
+      },
+      "id": "f60ae022-6d28-4f88-a885-cbdf33297a2c",
+      "name": "Aggregate Chunk Summaries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10256,
+        3664
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Below are partial summaries from consecutive parts of the same meeting, in order. Merge them into one final summary: remove duplicates (parts overlap slightly) and keep chronological sense.\n\n<partial_summaries>\n{{ $json.combinedSummaries }}\n</partial_summaries>",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "=You are a meeting transcript summarizer writing for a professional team channel.\n\nOutput format (Slack mrkdwn). Keep the English labels and headings exactly as written:\n\nTopic: <meeting topic as a short title, max 8 words, no ending period>\n\n*Key Points*\n• point\n\n*Decisions*\n• decision\n\n*Action Items*\n• Task, starting with a verb — *Owner* · _deadline_\n\nRules:\n- Write the topic and all bullet content in {{ $('Validate File').first().json.config.summaryLanguage }}.\n- The audio may be in English, Turkish or a mix of both. Understand all of it.\n- Only include facts stated in the input. Never invent names, dates or numbers.\n- Action Items: add \" — *Owner*\" only if a person was clearly named for that task, and \" · _deadline_\" only if a deadline was mentioned. If neither is known, write just the task. Never write \"Unassigned\", \"TBD\" or \"deadline:\".\n- Decisions are things explicitly agreed. Do not repeat the same sentence in Key Points, Decisions and Action Items; each section adds something new.\n- Key Points: max 6 bullets, one short sentence each.\n- If a section has nothing, write \"• None\".\n- The text comes from speech recognition and may contain recognition errors; do not quote obviously garbled words.\n- Return only the formatted text. No preamble, no commentary, no code blocks."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "427c8ec8-e244-4726-81db-e595cb747390",
+      "name": "Summarize (Reduce/Final)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        10416,
+        3664
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "effdfede-0d2d-4b00-8db9-ecf0d4be3770",
+      "name": "Groq Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        9984,
+        4192
+      ],
+      "credentials": {
+        "groqApi": {
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = String($input.first().json.text || '').trim();\nif (raw.length < 20) throw new Error('LLM returned an empty or too short summary');\n\nconst file = $('Decide Action').first().json;\nconst t = $('Prepare Transcript').first().json;\n\n// First line is \"Topic: ...\" -> pull it out as the message title\nconst m = raw.match(/^\\s*\\**\\s*(?:topic|konu)\\s*:?\\s*\\**\\s*:?\\s*(.+)\\n/i);\nconst fallback = String(file.fileName).replace(/\\.[^.]+$/, '');\nconst topic = (m ? m[1] : fallback).replace(/[*_]/g, '').trim().slice(0, 120) || fallback;\nconst summary = (m ? raw.slice(m[0].length) : raw).trim();\n\nconst lang = String(t.language || 'unknown');\nconst languageLabel = lang.charAt(0).toUpperCase() + lang.slice(1);\nconst durationLabel = t.durationMin < 1 ? '< 1 min' : `${t.durationMin} min`;\n\nreturn [{ json: {\n  topic,\n  summary,\n  fileId: file.fileId,\n  fileName: file.fileName,\n  attempts: file.attempts,\n  language: t.language,\n  languageLabel,\n  durationMin: t.durationMin,\n  durationLabel,\n} }];"
+      },
+      "id": "140fd014-ba79-45a2-8b2f-cf896f0d255f",
+      "name": "Validate Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10656,
+        3936
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds a Drive multipart upload: plain text in, Google Doc out.\n// Drive converts it itself, so only the Drive API is needed (no Google Docs API).\nconst cfg = $('Validate File').first().json.config;\nconst s = $input.first().json;\nconst t = $('Prepare Transcript').first().json;\nconst now = new Date().toISOString().slice(0, 16).replace('T', ' ');\n\nconst content = [\n  s.topic,\n  '',\n  `File: ${s.fileName}`,\n  `Processed: ${now} (UTC)`,\n  `Detected language: ${s.language}`,\n  `Duration: ~${s.durationMin} min`,\n  '',\n  '===== SUMMARY =====',\n  '',\n  s.summary.replace(/\\*/g, ''),          // strip Slack bold markers for the doc\n  '',\n  '===== FULL TRANSCRIPT =====',\n  '',\n  t.transcript,\n].join('\\n');\n\nconst metadata = {\n  name: `${now.slice(0, 10)} - ${s.topic}`,\n  mimeType: 'application/vnd.google-apps.document',\n};\nif (cfg.summariesFolderId) metadata.parents = [cfg.summariesFolderId];\n\nconst B = 'meeting_summary_boundary';\nconst body =\n  `--${B}\\r\\nContent-Type: application/json; charset=UTF-8\\r\\n\\r\\n${JSON.stringify(metadata)}\\r\\n` +\n  `--${B}\\r\\nContent-Type: text/plain; charset=UTF-8\\r\\n\\r\\n${content}\\r\\n` +\n  `--${B}--`;\n\nreturn [{ json: { body, contentLength: content.length } }];"
+      },
+      "id": "9d151e09-e23b-422d-be5a-9a32af33be3f",
+      "name": "Build Doc Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10880,
+        3936
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "multipart/related; boundary=meeting_summary_boundary",
+        "body": "={{ $json.body }}",
+        "options": {}
+      },
+      "id": "ed24c0d0-f055-44b0-a6a5-18a3492f90b9",
+      "name": "Save Summary Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        11104,
+        3936
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "id",
+          "cachedResultName": "meeting-özet"
+        },
+        "text": "=:memo: *{{ $('Validate Summary').first().json.topic }}*\n_{{ $('Validate Summary').first().json.fileName }}  ·  {{ $('Validate Summary').first().json.durationLabel }}  ·  {{ $('Validate Summary').first().json.languageLabel }}_\n\n{{ $('Validate Summary').first().json.summary }}{{ $json.webViewLink ? '\\n\\n:page_facing_up: <' + $json.webViewLink + '|Full transcript & summary>' : '\\n\\n:warning: _Archive doc could not be created: ' + ($json.error?.message || $json.error || 'unknown error') + '_' }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "807a7bc3-3286-4408-93cf-70657ac4e913",
+      "name": "Send Summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        11312,
+        3936
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "slackApi": {
+          "name": "Slack account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Mettings IDs"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sayfa1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "File ID": "={{ $('Validate Summary').first().json.fileId }}",
+            "File Name": "={{ $('Validate Summary').first().json.fileName }}",
+            "Status": "done",
+            "Attempts": "={{ $('Validate Summary').first().json.attempts }}",
+            "Last Error": "",
+            "Updated At": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "File ID"
+          ],
+          "schema": [
+            {
+              "id": "File ID",
+              "displayName": "File ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "File Name",
+              "displayName": "File Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Attempts",
+              "displayName": "Attempts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Last Error",
+              "displayName": "Last Error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Updated At",
+              "displayName": "Updated At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "a3934a27-1ece-4666-941d-4b8cf7cd852c",
+      "name": "Mark Done",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        11552,
+        3856
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Single error collector for every stage.\nconst ctx = $('Decide Action').first().json;\nconst cfg = ctx.config;\nconst stage = $prevNode.name;\nconst raw = $input.first()?.json || {};\n\nlet message;\nif (stage === 'Route by Action') {\n  message = 'PERMANENT: ' + ctx.reason;              // failed validation\n} else {\n  const e = raw.error;\n  message = (typeof e === 'string' ? e : (e?.message || e?.description)) || raw.message || 'Unknown error';\n  if (e?.description && e?.message && !message.includes(e.description)) message += ' - ' + e.description;\n}\n\n// Classify: permanent errors are not retried, transient ones are\nconst haystack = (message + ' ' + JSON.stringify(raw.error ?? '')).toLowerCase();\nconst httpCode = Number((haystack.match(/\\b([45]\\d\\d)\\b/) || [])[1]) || null;\nconst permanent = message.startsWith('PERMANENT:') || [400, 404, 413, 415, 422].includes(httpCode);\nconst outOfAttempts = ctx.attempts >= cfg.maxAttempts;\nconst status = (permanent || outOfAttempts) ? 'failed_permanent' : 'failed';\n\nmessage = message.replace(/^PERMANENT:\\s*/, '').slice(0, 500);\nconst executionUrl = cfg.n8nBaseUrl\n  ? `${cfg.n8nBaseUrl.replace(/\\/$/, '')}/workflow/${$workflow.id}/executions/${$execution.id}`\n  : '';\n\nreturn [{ json: {\n  fileId: ctx.fileId, fileName: ctx.fileName, stage, status, httpCode,\n  attempts: ctx.attempts, maxAttempts: cfg.maxAttempts,\n  errorType: permanent ? 'permanent' : 'transient',\n  message, executionUrl,\n} }];"
+      },
+      "id": "8c838783-c8fd-42c6-bf91-05997a11eb3d",
+      "name": "Build Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10192,
+        4352
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "id",
+          "cachedResultName": "meetings-error"
+        },
+        "text": "=:warning: *Meeting summary failed* (`{{ $json.status }}`)\n*File:* {{ $json.fileName }}\n*Stage:* {{ $json.stage }}\n*Attempt:* {{ $json.attempts }}/{{ $json.maxAttempts }} · {{ $json.errorType }}{{ $json.httpCode ? ' · HTTP ' + $json.httpCode : '' }}\n*Error:* {{ $json.message }}\n{{ $json.status === 'failed' ? ':repeat: Will be retried automatically.' : ':no_entry: Will NOT be retried - needs manual action.' }}{{ $json.executionUrl ? '\\n<' + $json.executionUrl + '|Open execution>' : '' }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "1badb588-cc8b-4d73-b826-8b1cc6ec8c5b",
+      "name": "Notify Error (Slack)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        10416,
+        4352
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "Slack account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id",
+          "cachedResultName": "Mettings IDs"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sayfa1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "File ID": "={{ $('Build Error').first().json.fileId }}",
+            "File Name": "={{ $('Build Error').first().json.fileName }}",
+            "Status": "={{ $('Build Error').first().json.status }}",
+            "Attempts": "={{ $('Build Error').first().json.attempts }}",
+            "Last Error": "={{ '[' + $('Build Error').first().json.stage + '] ' + $('Build Error').first().json.message }}",
+            "Updated At": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "File ID"
+          ],
+          "schema": [
+            {
+              "id": "File ID",
+              "displayName": "File ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "File Name",
+              "displayName": "File Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Attempts",
+              "displayName": "Attempts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Last Error",
+              "displayName": "Last Error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Updated At",
+              "displayName": "Updated At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "21704b33-ef58-4c7d-b22b-de0c59e87e5e",
+      "name": "Log Error To Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        10656,
+        4352
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## 🎙️ Meeting Summary\nAudio uploaded to Drive → transcribed → summarized → saved as a Google Doc → posted to Slack.\n\nStatus tracking: **Mettings IDs** sheet\nSettings: **Validate File** → CONFIG",
+        "height": 240,
+        "width": 336,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        6704,
+        3840
+      ],
+      "id": "96ecacb1-359b-489c-a3e3-db192175f567",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "### ⏰ Triggers\n**Drive Trigger:** checks the `meetings` folder every 15 min.\n**Retry Schedule:** retries failed files every 2 hours.",
+        "width": 352,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        6800,
+        4368
+      ],
+      "id": "5081011a-0aa4-4a89-815f-c0206e051248",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "### ✅ Validation\nIs it an audio file under 25 MB?\nWas it already processed (sheet)?\n→ **process** / **reject** / **skip**",
+        "height": 144,
+        "width": 320,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        7776,
+        3808
+      ],
+      "id": "e7a75990-df66-4946-ad1e-56070a68bd6f",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "### 📝 Transcription\nGroq Whisper converts audio to text.\nEN / TR / mixed language is auto-detected.\nEmpty or silent audio → permanent error.",
+        "height": 176,
+        "width": 336,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        8768,
+        3632
+      ],
+      "id": "ea792829-9097-42df-a61d-b554414f249a",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "###  Summarization\n**Short text:** summarized in one step.\n**Long text:** split into chunks → each summarized → merged.\nOutput: Topic · Key Points · Decisions · Action Items",
+        "height": 176,
+        "width": 320,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        9376,
+        3584
+      ],
+      "id": "735686c6-7544-4855-83d5-befa1cc12e07",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "###  Save & Send\nCreates a Google Doc (`date - topic`).\nPosts the summary to **#meeting-özet**.\nSets status to **done** in the sheet.",
+        "width": 320,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        10848,
+        3696
+      ],
+      "id": "c5402c3c-3245-47b5-b835-502230201fb6",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "### ⚠️ Error Handling\nClassifies the error:\n**failed** → retried every 2 hours (max 3)\n**failed_permanent** → not retried\nAlert goes to **#meetings-error**.",
+        "height": 176,
+        "width": 384,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        10224,
+        4160
+      ],
+      "id": "66fd67de-4d04-4c2d-97a8-f0ea40a85826",
+      "name": "Sticky Note6"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Drive Trigger": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Schedule": {
+      "main": [
+        [
+          {
+            "node": "Find Retryable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Retryable": {
+      "main": [
+        [
+          {
+            "node": "Select Retryable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Retryable": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Files": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Validate File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate File": {
+      "main": [
+        [
+          {
+            "node": "Check Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Status": {
+      "main": [
+        [
+          {
+            "node": "Decide Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Action": {
+      "main": [
+        [
+          {
+            "node": "Route by Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Action": {
+      "main": [
+        [
+          {
+            "node": "Mark Processing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Processing": {
+      "main": [
+        [
+          {
+            "node": "Download Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Audio": {
+      "main": [
+        [
+          {
+            "node": "Transcribe (Groq Whisper)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe (Groq Whisper)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Transcript": {
+      "main": [
+        [
+          {
+            "node": "Long Transcript?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Long Transcript?": {
+      "main": [
+        [
+          {
+            "node": "Split Transcript Into Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Summarize (Direct)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Transcript Into Chunks": {
+      "main": [
+        [
+          {
+            "node": "Summarize Chunk (Map)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Chunk (Map)": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Chunk Summaries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Chunk Summaries": {
+      "main": [
+        [
+          {
+            "node": "Summarize (Reduce/Final)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize (Reduce/Final)": {
+      "main": [
+        [
+          {
+            "node": "Validate Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize (Direct)": {
+      "main": [
+        [
+          {
+            "node": "Validate Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Summary": {
+      "main": [
+        [
+          {
+            "node": "Build Doc Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Doc Request": {
+      "main": [
+        [
+          {
+            "node": "Save Summary Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Summary Doc": {
+      "main": [
+        [
+          {
+            "node": "Send Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Summary": {
+      "main": [
+        [
+          {
+            "node": "Mark Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Done": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Error": {
+      "main": [
+        [
+          {
+            "node": "Notify Error (Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Error (Slack)": {
+      "main": [
+        [
+          {
+            "node": "Log Error To Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Error To Sheet": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Summarize (Direct)",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Summarize Chunk (Map)",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Summarize (Reduce/Final)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "4BPxAjzmimoUTWgb",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "meta": {},
+  "nodeGroups": [],
+  "tags": []
+}
